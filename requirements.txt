@@ -1,0 +1,7 @@
+torch
+transformers
+datasets
+langchain
+langchain-community
+bm25s
+faiss-cpu
