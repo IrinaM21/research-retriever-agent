@@ -28,9 +28,9 @@ class Retriever:
           top_k: Number of results to return per search method.
     """
 
-    data = load_dataset("arxiv_dataset", split="train[:1%]")
+    data = load_dataset("jamescalam/ai-arxiv2", split="train[:1%]")
 
-    self.text = [x["abstract"] for x in data]
+    self.text = [x["summary"] for x in data]
 
     self.docs = [Document(page_content=t, metadata={"id": i}) 
              for i, t in enumerate(self.text)]

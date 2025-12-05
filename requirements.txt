@@ -5,3 +5,5 @@ langchain
 langchain-community
 bm25s
 faiss-cpu
+sentence-transformers
+accelerate
