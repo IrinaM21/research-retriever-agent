@@ -4,6 +4,11 @@ import torch
 import textwrap
 import logging
 
+# timing
+from tqdm import tqdm
+import time
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Agent:
@@ -45,7 +50,7 @@ class Agent:
     self.model.eval()
     logger.info("Loaded models!")
     
-    
+
   def gen_from_prompt(self, prompt: str, **kwargs) -> str:
 
     """
@@ -186,7 +191,7 @@ class Agent:
 
     logger.info("Retrieving relevant papers...")
     self.relevant_papers = "\n\n".join(
-        textwrap.shorten(p, width=500, placeholder="…") for p in self.retriever.hybrid_search(query)
+        textwrap.shorten(p, width=500, placeholder="…") for p in tqdm(self.retriever.hybrid_search(query))
         )
     logger.info("Done!!!")
 

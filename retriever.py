@@ -6,6 +6,10 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.docstore.document import Document
 import bm25s
 
+# timing
+from tqdm import tqdm
+import time
+
 class Retriever:
 
   """
@@ -37,7 +41,8 @@ class Retriever:
 
     self.id_to_text = {i: t for i, t in enumerate(self.text)}
     
-    self.keyword_retriever = bm25s.BM25(corpus=self.text)
+    self.keyword_retriever = bm25s.BM25()
+    self.keyword_retriever.index(bm25s.tokenize(self.text))
     
     self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
@@ -66,9 +71,9 @@ class Retriever:
         A list of top_k matching abstracts ranked by BM25 score (IDs).
     """
 
-    tokenized_query = self.keyword_retriever.tokenize(query)
+    tokenized_query = bm25s.tokenize(query)
     keyword_res = self.keyword_retriever.retrieve(tokenized_query, k=self.top_k)
-    return [hit[2] for hit in keyword_res] 
+    return keyword_res[0][0]
   
   def semantic_search(self, query) -> List[int]:
     """
@@ -82,7 +87,7 @@ class Retriever:
     """
     
     semantic_res = self.vecdb.similarity_search_with_score(query, k=self.top_k)
-    ids = [match.metadata["id"] for match, score in semantic_res]
+    ids = [match.metadata["id"] for match, score in tqdm(semantic_res)]
     
     return list(dict.fromkeys(ids))[:self.top_k]
 
@@ -103,7 +108,7 @@ class Retriever:
     semantic_hits = self.semantic_search(query)
 
     rrf_scores = {}
-    for lst in [keyword_hits, semantic_hits]:
+    for lst in tqdm([keyword_hits, semantic_hits]):
         for rank, item in enumerate(lst, start=1): 
                                                    
             if item not in rrf_scores:
