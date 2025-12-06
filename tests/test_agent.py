@@ -49,3 +49,6 @@ class TestAgent(unittest.TestCase):
         self.assertIsInstance(response, str) # response should be a string
         self.assertGreater(len(response), 0) # should not be empty
         self.assertLess(len(response), 1000) # should be concise: just the 3-5 sentences requested in prompt
+
+if __name__ == "__main__":
+    unittest.main()
