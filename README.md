@@ -77,9 +77,11 @@ Currently using **Mistral-7b-instruct** (via llama.cpp) hosted on FastAPI for fa
 src: [AI ArXiv Dataset](https://huggingface.co/datasets/jamescalam/ai-arxiv2)
 
 ![Abstract lengths](images/abs-lens.png)
+
 Distribution of abstract lengths
 
 ![Publication years](images/pub-years.png)
+
 Distribution of publication years
 
 ## Future changes
