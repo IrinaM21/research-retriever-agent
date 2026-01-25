@@ -1,5 +1,3 @@
-torch
-transformers
 datasets
 langchain
 langchain-community
@@ -7,3 +5,8 @@ bm25s
 faiss-cpu
 sentence-transformers
 accelerate
+numpy
+tqdm
+fastapi
+uvicorn
+llama-cpp-python

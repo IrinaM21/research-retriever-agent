@@ -1,13 +1,11 @@
 from retriever import Retriever
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
 import textwrap
 import logging
-
-# timing
+from llama_cpp import Llama
 from tqdm import tqdm
 import time
 
+# Set up logging for traceability
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -17,12 +15,12 @@ class Agent:
   LLM-based research agent with retrieval, routing, and synthesis.
 
   The agent retrieves relevant papers using a hybrid retriever,
-  routes the user query to a subtask (novelty analysis or research
-  direction generation), and generates answers using a small LLM.
+  routes the user query to a subtask (creative or technical), and generates answers
+  using the retrieved paper abstracts.
 
   """
-
-  def __init__(self) -> None:
+  
+  def __init__(self, llm_name:str, embed_name:str) -> None:
 
     """
     Initialize the agent.
@@ -30,184 +28,175 @@ class Agent:
     Loads:
         - Hybrid retriever
         - Tokenizer
-        - Small LLM (Phi-3.5-mini-instruct)
+        - LLM for routing and answering queries
 
     Logs progress for each component.
+
+    Args:
+        llm_name: Path to GGUF model file.
+        embed_name: Embedding model name for retriever.
     """
 
     logger.info("Building agent...")
 
-    model_name = "microsoft/Phi-3.5-mini-instruct"
-
-    self.retriever = Retriever(embed_model="sentence-transformers/all-MiniLM-L6-v2")
+    self.retriever = Retriever(embed_model=embed_name)
     logger.info("Loaded retriever!")
-    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-    logger.info("Loaded tokenizer!")
 
-    self.model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path=model_name,
-                                                      device_map="auto",
-                                                      torch_dtype=torch.bfloat16) 
-    self.model.eval()
+    self.model = Llama(model_path=llm_name, n_threads=8, n_ctx=8192, n_gpu_layers=40, verbose=False)
+                                                       
     logger.info("Loaded models!")
     
-
   def gen_from_prompt(self, prompt: str, **kwargs) -> str:
-
     """
-    Generate text from the underlying language model.
-
     Args:
         prompt: Input prompt to send to the LLM.
-        **kwargs: Additional generation arguments (e.g., temperature).
+        **kwargs: Generation args (temperature, max_tokens, etc.)
 
     Returns:
-        Model-generated text decoded into a string.
+        Model-generated text.
     """
 
-    inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-    with torch.no_grad():
-        outputs = self.model.generate(**inputs, **kwargs)
-    return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+    # Default generation parameters, overridable by kwargs
+    params = {
+        "max_tokens": kwargs.pop("max_tokens", 512),
+        "temperature": kwargs.pop("temperature", 0.7),
+        "top_p": kwargs.pop("top_p", 0.9),
+        "stop": kwargs.pop("stop", None),
+    }
+
+    output = self.model(
+        prompt,
+        **params,
+    )
+
+    return output["choices"][0]["text"].strip()
   
   
   def route_query(self, query: str) -> str:
     """
-    Classify the user query into 'novelty' or 'direction'.
+    Classify the user query into 'creative' or 'technical'.
 
-    A routing prompt instructs the LLM to determine whether the user
-    is asking for:
-        - Novelty analysis (understanding or summarizing contributions)
-        - Research direction generation (idea creation)
+    Routing prompt instructs the LLM to determine whether the user
+    is asking:
+        - Creative questions (suggesting research directions)
+        - Technical questions (summarizing trends, explaining concepts)
 
     Args:
         query: The user's original request.
 
     Returns:
-        Either "novelty" or "direction".
+        Either "creative" or "technical".
     """
 
+    # explicitly define role as a classifier to reduce creative drift causing responses not in [creative, technical]
+    # list response options as individual words without punctuation to avoid generation of unexpected tokens
     prompt = f"""
-      Determine if the user would needs help generating new ideas or synthesizing existing information.
-      Examples:
-      1. Query: Can you summarize what's novel about the technique in this abstract? -> novelty
-      2. Query: Give me 2-3 new research directions based on this abstract. -> direction
-      3. Query: What related work is this paper building on and how? -> novelty
-      4. Query: I'd like to learn more about the concepts in this abstract. What should I read? -> novelty
-      5. Query: I'd like to contribute to the concepts in this abstract. Help me brainstorm. -> direction
-      Query: {query}
-      Answer: Respond in one word, either "novelty" or "direction."
-      """
+            You are a classifier that determines the user's intent when asking about AI research.
+
+            Examples:
+
+            Query: Can you outline some future research directions for LLMs?
+            Answer: creative
+
+            Query: How have researchers tackled high computational cost in AI research?
+            Answer: technical
+
+            Query: What are the novel contributions in this abstract?
+            Answer: technical
+
+            Query: Suggest some open problems in computer vision.
+            Answer: creative
+
+            Query: {query}
+            
+
+            Respond with EXACTLY one word: creative or technical
+            """
     
     logger.info("Routing request...")
       
-    return self.gen_from_prompt(
+    out = self.gen_from_prompt(
         prompt,
-        max_length=2000,
-        do_sample=False,
-        top_k=50
-        ).strip().split()[-1].lower()
+        max_tokens=2,
+        temperature=0.0,          # low temp for classification
+        stop=["\n"],
+    )
 
-  def novelty_detect(self, query: str) -> str:
+    return out.strip().lower()
+
+  def answer_creative(self, query: str) -> str:
 
     """
-    Analyze novelty by comparing the abstract to retrieved papers.
-
-    Generates a short explanation describing the core innovations of
-    the abstract relative to retrieved related work.
+    Answer a creative question using relevant abstracts.
 
     Args:
-        query: User query containing or referencing a research abstract.
+        query: User query
 
     Returns:
-        A 3–5 sentence novelty analysis with citations to retrieved papers.
+        A 3–5 sentence response.
     """
 
+    # clear role and response format definition (see route_query)
     prompt = f"""
-      Compare the abstract in the prompt to the nearest related papers and explain what novelty it introduces. 
-      Nearest related papers:
-      {self.relevant_papers}
+            You are a research analyst. Answer in EXACTLY 1-3 sentences. Do NOT repeat or include any part of the prompt.
 
-      Query: {query}
+            Use the following papers as background context only. Do not quote or restate them.
+            {self.relevant_papers}
 
-      Respond in 3–5 sentences. Cite sources by number.
-      """
+            The user is asking a creative research question:
+            {query}
+            """
     
     return self.gen_from_prompt(
-          prompt,
-          max_length=2000,
-          do_sample=False,
-          top_k=50,
-          temperature=0.1
-      )
+        prompt,
+        max_tokens=200,
+        temperature=0.7, # higher temp for creativity
+        top_p=0.9,
+        stop=["\n\n"],   # avoid rambling
+    )
   
-  def find_directions(self, query: str) -> str:
-
+  def get_relevant_papers(self, query: str) -> None:
     """
-    Suggest future research directions based on the abstract.
-
-    Uses retrieved related papers and the query abstract to propose
-    plausible extensions, follow-up experiments, or open research paths.
+    Retrieve relevant papers for the given query using the hybrid retriever.
 
     Args:
-        query: User query containing or referencing a research abstract.
-
-    Returns:
-        A 3–5 sentence set of research direction suggestions with citations.
+        query: User query string.
     """
-
-    prompt = f"""
-      Use the abstract in the query and relevant papers to suggest some future research directions.
-      Nearest related papers:
-      {self.relevant_papers}
-
-      Query: {query}
-
-      Respond in 3–5 sentences. Cite sources by number.
-      """
-
-    return self.gen_from_prompt(
-          prompt,
-          max_length=2000,
-          do_sample=True,
-          top_k=50,
-          temperature=0.7,
-          top_p=0.9
-      )
-  
-  def run(self, query: str) -> str:
-    """
-    Full agent pipeline:
-    1. Retrieve relevant papers
-    2. Route the query to 'novelty' or 'direction'
-    3. Execute the chosen reasoning task
-
-    Args:
-        query: The user query.
-
-    Returns:
-        A generated response tailored to the detected task type.
-    """
-
 
     logger.info("Retrieving relevant papers...")
     self.relevant_papers = "\n\n".join(
         textwrap.shorten(p, width=500, placeholder="…") for p in tqdm(self.retriever.hybrid_search(query))
         )
     logger.info("Done!!!")
+  
+  def answer_technical(self, query: str) -> str:
 
-    subtask = self.route_query(query)
+    """
+    Answer a technical question using relevant abstracts.
 
-    self.trace = {
-      "query": query,
-      "retrieved_papers": self.relevant_papers,
-      "subtask": subtask,
-    }
+    Args:
+        query: User query
 
-    if subtask not in ["novelty", "direction"]:
-      logger.warning(f"Router returned unexpected mode: {subtask}. Defaulting to novelty.")
-      subtask = "novelty"
-    
-    if "novel" in subtask:
-      return self.novelty_detect(query)
+    Returns:
+        A 3–5 sentence response with citations for retrieved papers.
+    """
 
-    return self.find_directions(query)
+    prompt = f"""
+      You are a research analyst. Answer the user's technical question using the relevant papers provided.
+
+      Nearest related papers:
+      {self.relevant_papers}
+
+      Query:
+      {query}
+
+      Answer in 3-5 sentences. Do NOT repeat or include any part of the prompt. Cite sources by number.
+      """
+
+    return self.gen_from_prompt(
+        prompt,
+        max_tokens=500,
+        temperature=0.6, # slightly lower temp for technical accuracy
+        top_p=0.9,
+        stop=["\n\n"],
+    )

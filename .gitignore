@@ -1,0 +1,12 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+research-agent/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Models, datasets, large files
+models/
